@@ -99,7 +99,11 @@ export default {
 
       // Gravity API configuration
       GRAVITY_API_URL: 'https://constellation.api.cloud.macrocosmos.ai/sn13.v1.Sn13Service/OnDemandData',
-      GRAVITY_KEYWORD_MODE: 'any'
+      GRAVITY_KEYWORD_MODE: 'any',
+
+      // Twitter API configuration
+      TWITTER_API_URL: 'https://api.twitterapi.io/twitter/tweet/advanced_search',
+      TWITTER_QUERY_TYPE: 'Latest'
     }
   },
 };

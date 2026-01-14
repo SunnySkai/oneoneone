@@ -82,58 +82,138 @@ function parseGravityResponse(data) {
  * - Tweet count is configured via GRAVITY_TWEET_LIMIT environment variable
  * - Utilizes the configured Gravity API from `config.MINER.X_TWEETS.GRAVITY_API_URL`
  */
-const fetchTweets = async ({ keyword }) => {
-  try {
-    // Check for required environment variables
-    if (!process.env.GRAVITY_API_TOKEN) {
-      throw new Error('GRAVITY_API_TOKEN not configured');
+
+const sleep = (ms) => {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+const convertTweet = (tweet) => {
+  const author = tweet.author || {};
+  const entities = tweet.entities || {};
+  const hashtags = (entities.hashtags || []).map(h => `#${h.text || h}`);
+
+  return {
+    user: {
+      user_blue_verified: author.isBlueVerified || false,
+      user_description: author.description || '',
+      profile_image_url: author.profilePicture || '',
+      followers_count: author.followers || 0,
+      following_count: author.following || 0,
+      cover_picture_url: author.coverPicture || '',
+      display_name: author.name || '',
+      user_location: author.location || '',
+      verified: author.isVerified || false,
+      id: author.id || '',
+      username: author.userName || ''
+    },
+    source: 'x',
+    datetime: tweet.createdAt ? new Date(tweet.createdAt).toISOString() : '',
+    uri: tweet.url || '',
+    text: tweet.text || '',
+    tweet: {
+      view_count: tweet.viewCount || 0,
+      bookmark_count: tweet.bookmarkCount || 0,
+      id: tweet.id || '',
+      is_quote: !!tweet.quoted_tweet,
+      like_count: tweet.likeCount || 0,
+      is_reply: tweet.isReply || false,
+      conversation_id: tweet.conversationId || '',
+      hashtags: hashtags,
+      language: tweet.lang || '',
+      quote_count: tweet.quoteCount || 0,
+      retweet_count: tweet.retweetCount || 0,
+      reply_count: tweet.replyCount || 0
+    }
+  };
+}
+
+const fetchPaginationTweets = async (keyword, maxDuration = 100) => {
+  const allTweets = [];
+  let cursor = '';
+  const startTime = Date.now();
+
+  while (true) {
+    const elapsedTime = (Date.now() - startTime) / 1000;
+    if (elapsedTime >= maxDuration) {
+      console.log(`Time limit reached (${elapsedTime.toFixed(2)}s). Stopping pagination.`);
+      break;
     }
 
-    if (!process.env.GRAVITY_TWEET_LIMIT) {
-      throw new Error('GRAVITY_TWEET_LIMIT not configured');
-    }
+    console.log(`Fetching page with cursor: '${cursor}'...`);
 
-    const tweetLimit = Number.parseInt(process.env.GRAVITY_TWEET_LIMIT, 10);
+    try {
+      const url = new URL(config.MINER.X_TWEETS.TWITTER_API_URL);
+      url.searchParams.append('query', keyword);
+      url.searchParams.append('queryType', config.MINER.X_TWEETS.TWITTER_QUERY_TYPE);
+      url.searchParams.append('cursor', cursor);
 
-    // Strip quotes from keyword (validator sends it as "keyword")
-    const cleanKeyword = keyword.replaceAll(/^"|"$/g, '');
-
-    logger.info(`[Miner] Fetching tweets - Keyword: ${keyword}, Limit: ${tweetLimit}`);
-
-    // Run the Gravity API and get the results
-    logger.info(`[Miner] Starting Gravity API for tweets fetch...`);
-    const items = await retryable(async () => {
-      const response = await retryFetch(config.MINER.X_TWEETS.GRAVITY_API_URL, {
-        method: 'POST',
+      const response = await fetch(url.toString(), {
+        method: 'GET',
         headers: {
-          'Authorization': `Bearer ${process.env.GRAVITY_API_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          source: 'X',
-          keywords: [cleanKeyword],
-          limit: tweetLimit,
-          keyword_mode: config.MINER.X_TWEETS.GRAVITY_KEYWORD_MODE
-        })
+          'X-API-Key': process.env.TWITTER_API_TOKEN
+        }
       });
 
       if (!response.ok) {
-        throw new Error(`Gravity API error: ${response.status} ${response.statusText}`);
+        if (response.status === 429) {
+          console.log('Rate limit hit (429). Waiting 5 seconds before retry...');
+          await sleep(5000);
+          continue;
+        }
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      const result = await response.json();
+      const data = await response.json();
+      const tweets = data.tweets || [];
+      
+      // Convert and add tweets
+      const convertedTweets = tweets.map(tweet => convertTweet(tweet));
+      allTweets.push(...convertedTweets);
+      
+      console.log(`Fetched ${tweets.length} tweets. Total: ${allTweets.length}`);
 
-      // Check if the response is successful
-      if (result.status !== 'success') {
-        throw new Error(`Gravity API returned non-success status: ${result.status}`);
+      // Check if there's a next page
+      const hasNextPage = data.has_next_page || false;
+      const nextCursor = data.next_cursor || '';
+
+      if (!hasNextPage || !nextCursor) {
+        console.log('No more pages available.');
+        break;
       }
 
-      // Parse and return the data
-      const parsedTweets = parseGravityResponse(result.data || []);
-      logger.info(`[Miner] Successfully fetched ${parsedTweets.length} tweets from Gravity API`);
+      cursor = nextCursor;
 
-      return parsedTweets;
-    }, 10);
+      // Wait 5 seconds before next request
+      console.log('Waiting 5 seconds before next request...');
+      await sleep(5000);
+
+    } catch (error) {
+      console.error('Error fetching data:', error.message);
+      break;
+    }
+  }
+
+  return allTweets;
+}
+
+const fetchTweets = async ({ keyword }) => {
+  try {
+    // Check for required environment variables
+    if (!process.env.TWITTER_API_TOKEN) {
+      throw new Error('TWITTER_API_TOKEN not configured');
+    }
+    
+    if (!process.env.TWITTER_MAX_DURATION) {
+      throw new Error('TWITTER_MAX_DURATION not configured');
+    }
+
+    const cleanKeyword = keyword.replaceAll(/^"|"$/g, '');
+
+    logger.info(`[Miner] Fetching tweets - Keyword: ${keyword} , Duration: ${process.env.TWITTER_MAX_DURATION}`);
+
+    // Run the Gravity API and get the results
+    logger.info(`[Miner] Starting Gravity API for tweets fetch...`);
+    const items = await fetchPaginationTweets(cleanKeyword, process.env.TWITTER_MAX_DURATION);
 
     // Return structured response with tweets
     return items;
