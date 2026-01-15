@@ -184,8 +184,8 @@ const fetchPaginationTweets = async (keyword, maxDuration = 100) => {
       cursor = nextCursor;
 
       // Wait 5 seconds before next request
-      console.log('Waiting 5 seconds before next request...');
-      await sleep(5000);
+      // console.log('Waiting 5 seconds before next request...');
+      // await sleep(5000);
 
     } catch (error) {
       console.error('Error fetching data:', error.message);
